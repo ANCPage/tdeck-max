@@ -25,6 +25,13 @@ jobs:
         working-directory: tabs-calc
         run: pio run
 
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tabs-calc-firmware
+          path: tabs-calc/.pio/build/tdeck_max/firmware.bin
+          if-no-files-found: error
+
   tdeckmax-py:
     name: Check tdeckmax-lib (syntax + key decode)
     runs-on: ubuntu-latest
