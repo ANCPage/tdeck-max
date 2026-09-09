@@ -1,0 +1,50 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  tabs-calc-cpp:
+    name: Build tabs-calc (PlatformIO)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+          key: pio-${{ hashFiles('tabs-calc/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --quiet platformio
+
+      - name: Build
+        working-directory: tabs-calc
+        run: pio run
+
+  tdeckmax-py:
+    name: Check tdeckmax-lib (syntax + key decode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile all library + app sources
+        run: python3 -m compileall -q tdeckmax-lib/tdeckmax tdeckmax-lib/apps
+      - name: Smoke-test key decoding
+        run: |
+          python3 - <<'EOF'
+          import sys; sys.path.insert(0, "tdeckmax-lib")
+          from tdeckmax.keys import decode_raw
+          pressed = [decode_raw(r) for r in range(129, 164)]
+          assert sum(1 for k in pressed if k) == 34, "expected 34 decodable presses"
+          assert all(decode_raw(r) is None for r in range(1, 36)), "releases must be ignored"
+          assert decode_raw(129 + 0) == ("digit", "7")   # FIFO key 1 -> T9 7 ('p')
+          assert decode_raw(163) == ("digit", "1")       # UP key dials 1
+          assert ("ctl", "tab_next") in pressed and ("ctl", "tab_prev") in pressed
+          print("keys OK:", sum(1 for k in pressed if k), "presses decoded")
+          EOF
