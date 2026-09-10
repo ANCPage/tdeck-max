@@ -11,3 +11,7 @@
 # polarity or physical key positions carries a VERIFY marker. Run apps/
 # tabs_calc.py first: it prints every decoded key and draws a test frame.
 __version__ = "0.1.0-dev"
+
+# Board geometry (hardware-free, so the host simulator can import it).
+# Landscape drawing surface; the panel is natively 240x320 portrait.
+WIDTH, HEIGHT, CELL = 320, 240, 8     # CELL = framebuf glyph cell (px)

@@ -6,10 +6,9 @@
 # app should swap in a bigger bitmap font (tdeckmax/fonts.py later).
 
 import framebuf
+from tdeckmax import WIDTH, HEIGHT, CELL      # geometry (hardware-free module)
 from tdeckmax.epd import UC8253
 
-WIDTH, HEIGHT = 320, 240
-CELL = 8                     # builtin font: 8px cell
 MAX_FAST_BETWEEN_FULL = 10   # full refresh after this many fast ones (anti-ghost)
 
 

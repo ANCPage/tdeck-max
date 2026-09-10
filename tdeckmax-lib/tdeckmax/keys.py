@@ -31,12 +31,15 @@ T9 = {
 # Control tokens produced by special keys. (kind, value) keys:
 #   ("digit", "0".."9")   append this digit to the focused field
 #   ("ctl", token)        token in CONTROLS below
+# Control tokens are deliberately generic — the decoder knows nothing about apps.
+# tabs_calc maps "sym"/"alt" to tab switching and "enter" to field swap; a menu
+# maps "enter" to "open" and "back" to "pop". Keep app semantics out of here.
 CONTROLS = {
-    "alt":   "tab_prev",    # LILYGO dialer used ALT='*'; we repurpose it
-    "sym":   "tab_next",    #                       SYM='#'
-    "ent":   "field_next",
+    "alt":   "alt",      # LILYGO's dialer used ALT='*'
+    "sym":   "sym",      #                       SYM='#'
+    "ent":   "enter",
     "back":  "back",
-    "space": "clear",
+    "space": "space",
 }
 
 PRESS_MIN, PRESS_MAX = 129, 163   # raw FIFO codes for key presses (LILYGO)
@@ -58,10 +61,18 @@ def rowcol_from_code(code):
     return (code // COLS, (COLS - 1) - (code % COLS))
 
 
-def decode_raw(raw):
+def decode_raw(raw, letters=False):
     """Decode one raw FIFO byte -> (kind, value) for a press, or None.
 
-    Release events return None (they are consumed by the driver and ignored).
+    kind is one of:
+      ("char",  "j")        a printable character
+      ("digit", "7")        numeric entry  (letters=False: T9 groups, UP=1, 0=0)
+      ("ctl",   "enter")    control token (see CONTROLS)
+      ("nav",   "up")       navigation key  (letters=True only)
+
+    letters=False (default) = the factory dialer convention: letters act as T9
+    digit groups, for number-entry apps. letters=True = the physical keycaps:
+    letters are letters; UP becomes a navigation key. Release events -> None.
     """
     if PRESS_IS_HIGH and PRESS_MIN <= raw <= PRESS_MAX:
         code = raw - PRESS_MIN
@@ -80,9 +91,11 @@ def decode_raw(raw):
     if key in CONTROLS:
         return ("ctl", CONTROLS[key])
     if key == "up":
-        return ("digit", "1")          # factory dialer: UP dials 1
+        return ("nav", "up") if letters else ("digit", "1")
     if key == "0":
-        return ("digit", "0")
+        return ("char", "0") if letters else ("digit", "0")
+    if letters:
+        return ("char", key)           # the letter printed on the keycap
     if key in T9:
         return ("digit", T9[key])
     return None

@@ -77,18 +77,18 @@ class App:
         if kind == "digit":
             self._field().digit(value)
             return True
-        # control
-        if value == "tab_next":
+        # control (tokens are generic; this app decides what they mean)
+        if value == "sym":                       # SYM = next tab
             self.tab = (self.tab + 1) % len(self.tabs)
             self.want_full = True
-        elif value == "tab_prev":
+        elif value == "alt":                     # ALT = previous tab
             self.tab = (self.tab - 1) % len(self.tabs)
             self.want_full = True
-        elif value == "field_next":
+        elif value == "enter":                   # ENT = swap A/B
             self.cur().focus_b = not self.cur().focus_b
-        elif value == "back":
+        elif value == "back":                    # DEL = backspace
             self._field().backspace()
-        elif value == "clear":
+        elif value == "space":                   # SPACE = clear field
             self._field().clear()
         else:
             return False
