@@ -82,6 +82,21 @@ wrote the dump back, read it back and compared.
 Conclusion: **a completely blanked device is restored from this dump and boots normally.** The undo
 is proven, not theoretical. Script: `drill.sh`; log: `drill_*.log`.
 
+## Current device state: MicroPython installed (2026-09-28)
+
+- Flashed `ESP32_GENERIC_S3-20260824-v1.29.0.bin` (sha256 `1dd9dcd27ba2d6a1cb7f7b49a063f46d3d807d68b0151161233920228285e300`,
+  1,783,296 bytes, from `micropython.org/download/ESP32_GENERIC_S3/`) after a full `erase-flash`:
+  erase 36 s, write 19 s, `Hash of data verified.`
+- Plain image is correct for this board: LILYGO's board def `boards/T-Deck-Pro.json` says
+  `"memory_type": "qio_qspi"` / "8M QSPI PSRAM" (**quad**); MicroPython's `spiram-oct` variant is
+  only for octal boards, and the standard image auto-detects SPIRAM.
+- REPL verified over USB-Serial/JTAG: MicroPython **v1.29.0**, `Generic ESP32S3 module with ESP32-S3`,
+  MAC `10:51:db:40:62:e4`, `gc.mem_free()` **8,314,384 B** (PSRAM working, quad mode),
+  `esp.flash_size()` 16,777,216, filesystem (`os.statvfs('/')`) 14,680,064 B.
+- The e-paper panel keeps its last frame after the flash — MicroPython does not drive it; our
+  `tdeckmax/epd.py` does.
+- **To return to the factory firmware: run the full restore above (3 minutes, drill-proven).**
+
 ## Related facts
 
 
