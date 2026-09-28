@@ -9,7 +9,7 @@ import framebuf
 from tdeckmax import WIDTH, HEIGHT, CELL      # geometry (hardware-free module)
 from tdeckmax.epd import UC8253
 
-MAX_FAST_BETWEEN_FULL = 10   # full refresh after this many fast ones (anti-ghost)
+MAX_FAST_BETWEEN_FULL = 5    # full refresh after this many fast ones (LILYGO: max 5)
 
 
 class EPaperUI:

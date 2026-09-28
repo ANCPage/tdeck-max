@@ -4,14 +4,17 @@
 #   simulator   : Planner()     -> frames just stay in the buffer for capture
 #
 # Policy: full refresh on boot / screen change / every FAST_BUDGET fast ones.
-# The budget mirrors what Meshtastic settled on in the field for this panel
-# (EINK_LIMIT_FASTREFRESH=10), and full refreshes are the cure for ghosting.
+# Budget = 5, per LILYGO's own T-Deck Pro/Max wiki table ("Fast Refresh: max 5
+# consecutive, then full refresh"; "Partial Refresh: no flashing, max 5
+# consecutive"). Meshtastic runs 10 on this panel; LILYGO's own docs say 5, so
+# we use the vendor number and treat it as a VERIFY-on-hardware constant.
 #
-# diff_rect() is the groundwork for the prize: windowed partial refresh. Today we
-# still push the whole canvas; once windowed partial works on this panel, the same
-# rect tells the driver how small a box it can send.
+# Also note LILYGO documents *partial* refresh on this panel as "no flashing" —
+# so true windowed partial refresh may well be reachable; that is our prize.
+# diff_rect() below is the groundwork: today we still push the whole canvas,
+# once windowing works the same rect tells the driver how small a box to send.
 
-FAST_BUDGET = 10
+FAST_BUDGET = 5
 
 
 class Planner:
