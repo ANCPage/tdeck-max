@@ -1,80 +1,77 @@
-# main.py — runs automatically on every boot.
+# main.py — boots straight into the notes app: type, and see it on the glass.
 #
-# Keyboard check with visible feedback and no timing pressure:
-#   * press keys whenever you like; the panel shows what the keyboard controller
-#     actually reported (raw FIFO code + our decode)
-#   * every event is appended to /kb.log on the device, readable over USB later
-#   * any boot-time exception is written to /boot_error.log, so a silent failure
-#     at boot becomes a readable traceback
+# This is the end-to-end test that matters: if the keymap is right, what appears
+# on the panel is what your fingers pressed. Keystrokes are coalesced (~120 ms)
+# so fast typing costs one panel refresh per burst, not one per key.
+#
+# Logs every raw code + decode to /keys.log, and any boot exception to
+# /boot_error.log.
 
 import sys
 import time
 
 import framebuf
-from machine import Pin
 
+from apps.notes import NotesScreen
 from tdeckmax import HEIGHT, WIDTH, keys
 from tdeckmax.board import Board
 from tdeckmax.epd import UC8253
+from tdeckmax.planner import Planner
+from tdeckmax.screen import App
 from tdeckmax.tca8418 import TCA8418
 
-ROW = WIDTH // 8
+COALESCE_MS = 120
 
 
 def start():
     board = Board()
     board.release_resets()
+    board.pulse_keyboard_reset()
     epd = UC8253(board.spi, board.epd_cs, board.epd_dc, board.epd_rst, board.epd_busy)
     board.frontlight(700)
 
     kb = TCA8418(board.i2c)
-    kb_ok = kb.begin()
-    kb_int = Pin(15, Pin.IN, Pin.PULL_UP)
+    print("kb.begin():", kb.begin())
 
-    buf = bytearray(ROW * HEIGHT)
-    count = [0]
-    paints = [0]
+    buf = bytearray(WIDTH * HEIGHT // 8)
+    fb = framebuf.FrameBuffer(buf, WIDTH, HEIGHT, framebuf.MONO_HLSB)
+    app = App(Planner(epd), fb, buf)
+    app.push(NotesScreen())
+    app.paint()
 
-    def paint(line1, line2="", line3=""):
-        fb = framebuf.FrameBuffer(buf, WIDTH, HEIGHT, framebuf.MONO_HLSB)
-        fb.fill(1)
-        fb.rect(0, 0, WIDTH, HEIGHT, 0)
-        fb.text("KEYBOARD TEST", 12, 12, 0)
-        fb.text(line1, 12, 56, 0)
-        fb.text(line2, 12, 80, 0)
-        fb.text(line3, 12, 104, 0)
-        fb.text("events seen: %d" % count[0], 12, HEIGHT - 88, 0)
-        fb.text("kb init: %s  INT: %d" % (kb_ok, kb_int.value()), 12, HEIGHT - 68, 0)
-        fb.text("press any keys", 12, HEIGHT - 40, 0)
-        paints[0] += 1
-        if paints[0] % 6 == 0:
-            epd.full_refresh(buf)
-        else:
-            epd.fast_refresh(buf)
-
-    log = open("/kb.log", "a")
-    log.write("--- boot ---\n")
+    log = open("/keys.log", "a")
+    log.write("--- notes app up ---\n")
     log.flush()
-    print("keyboard test up; kb init =", kb_ok)
-
-    paint("waiting for a key", "no events yet")
+    print("notes app up")
 
     while True:
         if kb.available():
+            changed = False
             raw = kb.get_event()
-            count[0] += 1
-            dec = keys.decode_raw(raw, letters=True)
-            line = "raw=%3d (0x%02x) -> %s" % (raw, raw, dec)
-            print(line)
-            log.write(line + "\n")
+            key = keys.decode_raw(raw, letters=True)
+            log.write("%3d %s\n" % (raw, key))
             log.flush()
-            paint(line, "decoded: %s" % (dec,), "event #%d" % count[0])
-        time.sleep_ms(10)
+            if key and app.handle(key):
+                changed = True
+            # coalesce the burst, then repaint once
+            deadline = time.ticks_add(time.ticks_ms(), COALESCE_MS)
+            while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+                if kb.available():
+                    raw = kb.get_event()
+                    key = keys.decode_raw(raw, letters=True)
+                    log.write("%3d %s\n" % (raw, key))
+                    log.flush()
+                    if key and app.handle(key):
+                        changed = True
+                time.sleep_ms(4)
+            if changed:
+                app.paint()
+        time.sleep_ms(4)
 
 
 try:
     start()
-except Exception as exc:                    # noqa: BLE001 - report anything at all
+except Exception as exc:                    # noqa: BLE001
     with open("/boot_error.log", "a") as fh:
         fh.write("\n--- boot failure ---\n")
         sys.print_exception(exc, fh)

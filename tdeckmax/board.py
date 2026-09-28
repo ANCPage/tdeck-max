@@ -2,6 +2,8 @@
 # Pin values verified against Xinyuan-LilyGO/T-Deck-MAX
 # (lib/TDeckMaxBoard/src/TDeckMaxBoard.h + docs/pinmap.md).
 
+import time
+
 from machine import Pin, I2C, SPI, PWM
 from tdeckmax.xl9555 import XL9555
 
@@ -66,6 +68,19 @@ class Board:
     def release_resets(self):
         for port in _RESET_GATES:
             self.gate(port, True)       # touch + keyboard out of reset
+
+    def pulse_keyboard_reset(self, hold_ms: int = 60):
+        """Assert + release the keyboard's reset line.
+
+        Needed in practice: after the factory firmware has been through its
+        sleep/shutdown path, the TCA8418 can come up latched -- it answers I2C
+        and reports healthy registers, but never queues a single key event.
+        A LOW pulse on XL9555 P0.9 fixes it (hardware-verified 2026-09-29).
+        """
+        self.gate(GATE_KB_RST, False)
+        time.sleep_ms(hold_ms)
+        self.gate(GATE_KB_RST, True)
+        time.sleep_ms(250)
 
     # -- convenience ----------------------------------------------------------
     def frontlight(self, duty: int = 0):
