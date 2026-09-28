@@ -65,7 +65,25 @@ python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 write-flash 0x10000 T-Deck-MAX
   USB-JTAG). That is the only irreversible class of operation on this chip. Everything else here is
   a write that this dump undoes.
 
+## Restore drill — executed 2026-09-28 18:34–18:37 AEST: **PASSED**
+
+Walked the worst case on purpose: verified the backup, **erased all 16 MB** (blank, unbootable device),
+wrote the dump back, read it back and compared.
+
+| Step | Result | Time |
+|---|---|---|
+| 0. verify backup sha256 | `factory-full-dump.bin: OK` | — |
+| 1. chip reachable over USB-JTAG | ESP32-S3 rev v0.2, MAC `10:51:db:40:62:e4` | — |
+| 2. `erase-flash` (16 MB) | erased (device blank) | 37 s |
+| 3. `write-flash 0 factory-full-dump.bin` | `Hash of data verified.` | 1 m 51 s |
+| 4. `verify-flash 0 factory-full-dump.bin` | `Verification successful (digest matched).` | 28 s |
+| 5. boot after restore | normal factory init: PSRAM, XL9555, ES8311 codec, SX1262 OK, GPS task, BHI260AP IMU | — |
+
+Conclusion: **a completely blanked device is restored from this dump and boots normally.** The undo
+is proven, not theoretical. Script: `drill.sh`; log: `drill_*.log`.
+
 ## Related facts
+
 
 - Sleep screen → deep sleep; **wake = press BOOT** (`EXT1`, GPIO0 active low). Shutdown screen cuts
   the PMIC rails (`PPM.shutdown()`), needs a press-and-hold power-on afterwards.
