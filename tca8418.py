@@ -54,9 +54,12 @@ class TCA8418:
         except OSError:
             return False
         self._write3(REG_GPIO_DIR1, 0x00, 0x00, 0x00)      # all inputs
-        self._write3(REG_EVT_MODE1, 0xFF, 0xFF, 0xFF)       # Adafruit: all pins -> events
+        # keep the FIFO key-only: with all pins in event mode, GPIO events (touch
+        # INT, IMU INT) leak in as out-of-range codes like 226/98. Adafruit sets
+        # 0xFF here; we don't want their GPIO events.
+        self._write3(REG_EVT_MODE1, 0x00, 0x00, 0x00)       # no GPIO -> FIFO
         self._write3(REG_GPIO_INT_LVL1, 0x00, 0x00, 0x00)   # falling ints
-        self._write3(REG_GPIO_INT_EN1, 0xFF, 0xFF, 0xFF)    # Adafruit: all pins -> irq
+        self._write3(REG_GPIO_INT_EN1, 0x00, 0x00, 0x00)    # polling: no irq
         self._write3(REG_DEBOUNCE_DIS1, 0x00, 0x00, 0x00)   # debounce on
         self.matrix(keys.ROWS, keys.COLS)
         self.flush()
