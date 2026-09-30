@@ -7,6 +7,7 @@
     python3 tools/tdm_sync.py rm <remote>
     python3 tools/tdm_sync.py mkd /somedir
     python3 tools/tdm_sync.py repl "<python code>"
+    python3 tools/tdm_sync.py reboot
     python3 tools/tdm_sync.py deploy [main.py]
 
 `deploy` is the wireless equivalent of push.sh: it uploads the library, the
@@ -227,9 +228,10 @@ def main():
 
     elif cmd == "repl":
         code = sys.argv[2]
+        # Send the header AND the payload together: the device reads the code
+        # before it answers, so waiting for "OK" first deadlocks (that was the
+        # "device refused" bug).
         s.sendall(("TDM %s EXEC %d\n" % (token, len(code))).encode())
-        if read_line(s) != "OK":
-            sys.exit("device refused")
         s.sendall(code.encode())
         head = read_line(s).split()
         if head and head[0] == "OK":
@@ -242,7 +244,21 @@ def main():
                 data += chunk
             sys.stdout.write(data.decode("utf-8", "replace"))
         else:
-            sys.exit("unexpected reply: %s" % " ".join(head))
+            sys.exit("unexpected reply: %s" % (" ".join(head) or "nothing"))
+
+    elif cmd == "reboot":
+        print("rebooting the device over WiFi ...")
+        exec_code(ip, token, "import machine; machine.reset()")
+        for _ in range(30):
+            time.sleep(3)
+            txt = get_text(ip, token, "/boot.log")
+            if txt:
+                print("device is back:")
+                for line in txt.splitlines()[-4:]:
+                    print("   ", line)
+                break
+        else:
+            print("no reply after 90 s - check /net.log on the device")
 
     else:
         sys.exit(__doc__)
@@ -250,4 +266,5 @@ def main():
     s.close()
 
 
-main()
+if __name__ == "__main__":
+    main()

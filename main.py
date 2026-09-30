@@ -97,7 +97,8 @@ def start():
 
     state = {"changed": False, "beat": time.ticks_ms(), "keys": 0,
              "armed": time.ticks_ms(), "batt": time.ticks_ms(), "repulses": 0,
-             "net_on": net_on, "netpoll": time.ticks_ms()}
+             "net_on": net_on, "netpoll": time.ticks_ms(),
+             "lastkey": time.ticks_ms()}
 
     def revive_if_deaf():
         """The TCA8418 can come up latched: I2C answers, registers look sane,
@@ -121,6 +122,12 @@ def start():
             app.paint()                 # redraw so the operator sees it did something
 
     def pump():
+        # notes: flush to flash once typing has stopped. Debounced on purpose --
+        # one write per pause, not per keystroke (flash wear), and the header's
+        # "*" disappears once it is safely written.
+        if notes.dirty and time.ticks_diff(time.ticks_ms(), state["lastkey"]) > 5000:
+            if notes.save():
+                state["changed"] = True
         # network: polled from the UI loop, so it can never block the device
         if state["net_on"] and time.ticks_diff(time.ticks_ms(), state["netpoll"]) > 1000:
             state["netpoll"] = time.ticks_ms()
@@ -165,6 +172,7 @@ def start():
                 app.paint()
                 state["changed"] = False
                 state["beat"] = time.ticks_ms()
+            state["lastkey"] = time.ticks_ms()
         if HEARTBEAT_MS and time.ticks_diff(time.ticks_ms(), state["beat"]) > HEARTBEAT_MS:
             app.paint()                     # heartbeat: header tick rises
             state["beat"] = time.ticks_ms()
