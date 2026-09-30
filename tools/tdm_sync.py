@@ -29,13 +29,21 @@ PORT = 8098
 
 
 def target():
+    """Where to connect: an explicit address, else the last beacon record.
+
+    TDM_IP exists because the device's beacon to the Pi is the flakiest path on
+    this network (it times out while Pi -> device sometimes works), and the
+    device shows its own address on screen -- so you can always just say which
+    address to use:  TDM_IP=192.168.0.247 python3 tools/tdm_sync.py ls
+    """
     cfg = json.load(open(WIFI))
-    ip = None
-    if os.path.exists(DEVICE):
+    ip = os.environ.get("TDM_IP")
+    if not ip and os.path.exists(DEVICE):
         ip = json.load(open(DEVICE)).get("ip")
     ip = ip or cfg.get("last_ip")
     if not ip:
-        sys.exit("no device IP yet: start tools/beacon_listener.py, then reset the device")
+        sys.exit("no device IP: set TDM_IP=..., or start tools/beacon_listener.py "
+                 "and reboot the device")
     return ip, cfg["token"]
 
 
