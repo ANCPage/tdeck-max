@@ -46,16 +46,23 @@ def start():
 
     buf = bytearray(WIDTH * HEIGHT // 8)
     fb = framebuf.FrameBuffer(buf, WIDTH, HEIGHT, framebuf.MONO_HLSB)
-    app = App(Planner(epd, fast_budget=0), fb, buf)
+    # fast_budget=5: five fast edits (~0.76 s) per full refresh (~3.2 s). This is
+    # LILYGO's own refresh budget number. It was set to 0 during the USB-wedge
+    # hunt on the theory that fast refreshes were destabilising the panel; that
+    # theory is gone (the "wedge" was USB modes and a misread reset code), and
+    # budget 0 costs ~3 s of full refresh on every single keystroke.
+    app = App(Planner(epd, fast_budget=5), fb, buf)
     notes = NotesScreen()
     notes.status = gauge.soc_text() + " "      # battery in the header, as the factory UI has it
     app.push(notes)
     app.paint()
 
     # Bring the network up in a THREAD: WiFi is slow to associate and must never
-    # delay or break the UI. Once up, the device beacons its IP to the Pi and
-    # serves the LAN file service, so development stops depending on the fragile
-    # USB-CDC.
+    # delay or break the UI. OFF BY DEFAULT: a WiFi connect that cannot succeed
+    # blocks the network stack for up to 25 s, which trips the ESP32 task
+    # watchdog and reboots the chip (observed as reset_cause=2 in /boot.log, and
+    # as "the device switches itself off after ~15 s" from the outside). Create
+    # /net_on on the device when there is a verified network to join.
     def bring_up_net():
         try:
             import net
@@ -64,8 +71,10 @@ def start():
             print("net bring-up failed:", exc)
 
     try:
-        import _thread
-        _thread.start_new_thread(bring_up_net, ())
+        import os
+        if "net_on" in os.listdir("/"):
+            import _thread
+            _thread.start_new_thread(bring_up_net, ())
     except Exception:
         pass
 
@@ -74,11 +83,18 @@ def start():
     # ESP32-S3 trigger (micropython #17560: USB interrupts during flash ops).
     # Keep a small in-RAM ring instead, and write one line per boot only.
     cause = machine.reset_cause()
-    reasons = {0: "PWRON", 1: "HARD", 2: "WDT", 3: "DEEPSLEEP", 4: "SOFT",
-               5: "BROWNOUT", 6: "SDIO"}
+    # esp_reset_reason() values (esp-idf), which is what the esp32 port returns
+    # RAW -- NOT the classic ESP8266 numbering our first dict assumed. Verified
+    # 2026-09-30: an ordinary reset (host DTR/RTS or the RST button) reports
+    # 2 = ESP_RST_EXT, which the old dict mislabelled "WDT" and sent us chasing a
+    # watchdog that was never tripping.
+    reasons = {0: "UNKNOWN", 1: "PWRON", 2: "EXT/pin", 3: "SW", 4: "PANIC",
+               5: "INT_WDT", 6: "TASK_WDT", 7: "WDT", 8: "DEEPSLEEP",
+               9: "BROWNOUT", 10: "SDIO"}
     with open("/boot.log", "a") as fh:
         fh.write("boot reset_cause=%s(%s) note=%s\n"
                  % (cause, reasons.get(cause, "?"), machine.wake_reason()))
+        fh.write("expander ready after %d ms\n" % board.expander_ready_ms)
         fh.write(gauge.summary() + "\n")
     recent = []                     # last keys seen, RAM only
 

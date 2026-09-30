@@ -62,12 +62,15 @@ if [ "$REFLASH" = "1" ]; then
     echo "== 1/4 enter flash mode =="
     ensure_flash_mode || exit 1
     echo "== 2/4 reflash MicroPython (this WIPES the filesystem) =="
-    timeout 180 python3 -m esptool --chip esp32s3 -p "$PORT" --before no-reset erase-flash >/dev/null 2>&1 \
-        || { echo "!! erase failed"; exit 1; }
-    timeout 300 python3 -m esptool --chip esp32s3 -p "$PORT" --before no-reset --after no-reset write-flash 0 "$MP" 2>&1 \
+    # NOTE: do NOT pass --before no-reset here. "303a:1001" covers BOTH the ROM's
+    # download mode and the factory firmware's console, and no-reset only works in
+    # the former. esptool's own reset handshake works in both, because the
+    # USB-Serial-JTAG peripheral implements it in hardware.
+    timeout 180 python3 -m esptool --chip esp32s3 -p "$PORT" erase-flash 2>&1 | tail -1
+    timeout 300 python3 -m esptool --chip esp32s3 -p "$PORT" --after hard-reset write-flash 0 "$MP" 2>&1 \
         | grep -E "Hash of data verified|Wrote" || true
-    leave_flash_mode || exit 1
-    sleep 3
+    sleep 8
+    seen 303a:4001 && echo "   MicroPython is up (303a:4001)" || echo "   !! device did not come back as MicroPython"
 else
     echo "== 1/4 no reflash: keeping MicroPython and the filesystem =="
 fi
@@ -88,3 +91,10 @@ try:
 except Exception as e:
     print('no /boot.log:', e)
 " 2>/dev/null | tail -10
+
+# Reading the log means entering the REPL, which interrupts the app: leave the
+# device with the app actually RUNNING, or the keys are dead and the panel looks
+# frozen the next time a human looks at it.
+echo "== leaving the app running (final reset) =="
+timeout 30 python3 -m mpremote connect "$PORT" exec "import machine; machine.reset()" >/dev/null 2>&1
+echo "== deployed and running =="
