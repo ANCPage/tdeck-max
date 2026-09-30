@@ -29,6 +29,8 @@ STA = None              # the WLAN object, owned by begin()/poll()
 _SERVED = False         # service + beacon started once
 _TRIES = 0              # association retries (capped backoff)
 _NEXT_TRY = 0           # ticks deadline for the next retry
+_LAST_BEACON = 0        # ticks of the last beacon
+BEACON_EVERY_MS = 120_000   # re-beacon every 2 min so the Pi tracks address changes
 LOG_PATH = "/net.log"
 
 
@@ -104,9 +106,12 @@ def beacon(ip):
                b"Connection: close\r\n\r\n" % (cfg["pi"].encode(), len(body)))
         s.send(body)
         s.close()
+        _log("beacon sent (%s -> %s:8099)" % (ip, cfg["pi"]))
         return True
     except Exception as exc:
-        print("net: beacon failed:", exc)
+        # Logged, not printed: a silent beacon failure is how the Pi ended up
+        # with a stale address while everything looked healthy.
+        _log("beacon FAILED to %s:8099: %s" % (cfg.get("pi"), exc))
         return False
 
 
@@ -309,24 +314,35 @@ def begin():
 def poll():
     """Called from the app loop. Returns the IP once up; starts the beacon and
     the file service exactly once. Never blocks, never raises."""
-    global LAST_IP, _SERVED, _TRIES, _NEXT_TRY
+    global LAST_IP, _SERVED, _TRIES, _NEXT_TRY, _LAST_BEACON
     if STA is None:
         return None
     try:
         if STA.isconnected():
             ip = STA.ifconfig()[0]
             _TRIES = 0
+            now = time.ticks_ms()
             if not _SERVED:
                 _SERVED = True
                 LAST_IP = ip
                 _log("connected ip=%s" % ip)
                 beacon(ip)
+                _LAST_BEACON = now
                 try:
                     import _thread
                     _thread.start_new_thread(serve, ())
                     _log("file service on port %d" % PORT)
                 except Exception as exc:                           # noqa: BLE001
                     _log("service not started: %s" % exc)
+            elif time.ticks_diff(now, _LAST_BEACON) > BEACON_EVERY_MS:
+                # Keep the Pi's record fresh: DHCP gave the device a different
+                # address more than once today, and a one-shot boot beacon left
+                # us connecting to a stale IP ("No route to host").
+                if ip != LAST_IP:
+                    _log("address changed: %s -> %s" % (LAST_IP, ip))
+                    LAST_IP = ip
+                beacon(ip)
+                _LAST_BEACON = now
             return ip
 
         # Not connected. The WiFi stack SILENTLY GOES IDLE (status 1000) or
@@ -336,7 +352,10 @@ def poll():
         st = STA.status()
         now = time.ticks_ms()
         if st in (1000, 201, 202, 203) and time.ticks_diff(now, _NEXT_TRY) >= 0:
-            wait = min(60, 5 * (2 ** min(_TRIES, 4)))
+            # Gentle on purpose: hammering the AP every 5 s produced a run of
+            # status=202 (wrong password) rejections on this extender, i.e. the
+            # retry storm itself was making things worse. 30 s, doubling to 5 min.
+            wait = min(300, 30 * (2 ** min(_TRIES, 3)))
             _TRIES += 1
             _NEXT_TRY = time.ticks_add(now, wait * 1000)
             _log("retry %d (status=%s): re-issuing connect, next in %ds" % (_TRIES, st, wait))

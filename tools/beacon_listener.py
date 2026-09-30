@@ -23,13 +23,37 @@ print("beacon listener on :8099 -> %s" % OUT, flush=True)
 while True:
     conn, addr = sock.accept()
     try:
-        data = conn.recv(2048).decode("utf-8", "replace")
-        body = data.split("\r\n\r\n", 1)[-1]
+        # Read the full request: a single recv() often returns only the headers,
+        # which is how my own localhost test wrote "127.0.0.1" into device.json
+        # and sent every tool chasing the Pi itself.
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = conn.recv(1024)
+            if not chunk:
+                break
+            data += chunk
+        head, _, body = data.partition(b"\r\n\r\n")
+        want = 0
+        for line in head.split(b"\r\n"):
+            if line.lower().startswith(b"content-length:"):
+                try:
+                    want = int(line.split(b":", 1)[1])
+                except Exception:                                # noqa: BLE001
+                    want = 0
+        while len(body) < want:
+            chunk = conn.recv(1024)
+            if not chunk:
+                break
+            body += chunk
+
         rec = {"ip": addr[0], "when": time.strftime("%Y-%m-%d %H:%M:%S")}
         try:
-            rec.update(json.loads(body))
-        except Exception:
+            rec.update(json.loads(body.decode("utf-8", "replace")))
+        except Exception:                                        # noqa: BLE001
             pass
+        if str(rec.get("ip", "")).startswith("127."):
+            print("ignoring loopback beacon (test traffic, not the device)", flush=True)
+            continue
         with open(OUT, "w") as fh:
             json.dump(rec, fh)
         print("beacon: %s" % rec, flush=True)

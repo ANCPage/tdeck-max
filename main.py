@@ -141,8 +141,12 @@ def start():
             marker = "  "
             try:
                 from tdeckmax import net
-                if getattr(net, "LAST_IP", None):
-                    marker = "w "          # on the network: the header says so
+                ip = getattr(net, "LAST_IP", None)
+                if ip:
+                    # Show the address on the glass: when the device changes IP
+                    # (DHCP loves doing that here) it is the only place to read
+                    # it if the network is unreachable from the Pi.
+                    marker = "w%s " % ip.rsplit(".", 1)[-1]
             except Exception:
                 pass
             notes.status = gauge.soc_text() + " " + marker
