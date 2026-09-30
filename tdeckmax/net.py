@@ -31,6 +31,8 @@ _TRIES = 0              # association retries (capped backoff)
 _NEXT_TRY = 0           # ticks deadline for the next retry
 _LAST_BEACON = 0        # ticks of the last beacon
 BEACON_EVERY_MS = 120_000   # re-beacon every 2 min so the Pi tracks address changes
+_CONNECT_AT = 0         # ticks when connect() was last issued (stuck-connecting watchdog)
+STUCK_MS = 45_000       # a connect still "connecting" after this is treated as failed
 LOG_PATH = "/net.log"
 
 
@@ -300,11 +302,24 @@ def begin():
     except Exception as exc:                                       # noqa: BLE001
         _log("begin: active() failed: %s" % exc)
         return False
+    # Turn radio power-save OFF. By default the ESP32 naps its radio between
+    # beacons; on this extender that showed up as the device silently vanishing
+    # from the LAN for minutes at a time, which looked like a code bug.
+    for pm_value in (getattr(network.WLAN, "PM_NONE", None), 0):
+        if pm_value is None:
+            continue
+        try:
+            STA.config(pm=pm_value)
+            _log("power-save disabled (pm=%r)" % (pm_value,))
+            break
+        except Exception as exc:                                   # noqa: BLE001
+            _log("pm config %r failed: %s" % (pm_value, exc))
     if STA.isconnected():
         return True
     try:
         _log("begin: connecting to %r" % cfg["ssid"])
         STA.connect(cfg["ssid"], cfg["pwd"])
+        globals()["_CONNECT_AT"] = time.ticks_ms()
         return True
     except Exception as exc:                                       # noqa: BLE001
         _log("begin: connect() raised: %s" % exc)
@@ -345,22 +360,29 @@ def poll():
                 _LAST_BEACON = now
             return ip
 
-        # Not connected. The WiFi stack SILENTLY GOES IDLE (status 1000) or
-        # gives up (201/203) and then nothing retries -- observed on this
-        # extender network, where the device sat at 0.0.0.0 doing nothing.
-        # Re-arm the association with a capped backoff.
+        # Not connected. Two failure shapes need different handling:
+        #  * the stack goes IDLE (1000) or gives up (201/202/203), or
+        #  * it sits in 1001 "connecting" FOREVER -- observed on this extender,
+        #    where the device then never retried and simply stayed off the LAN.
+        # Both re-arm the association, with a capped backoff.
         st = STA.status()
         now = time.ticks_ms()
-        if st in (1000, 201, 202, 203) and time.ticks_diff(now, _NEXT_TRY) >= 0:
+        stuck = (st == 1001 and _CONNECT_AT
+                 and time.ticks_diff(now, _CONNECT_AT) > STUCK_MS)
+        if (st in (1000, 201, 202, 203) or stuck) and time.ticks_diff(now, _NEXT_TRY) >= 0:
             # Gentle on purpose: hammering the AP every 5 s produced a run of
             # status=202 (wrong password) rejections on this extender, i.e. the
             # retry storm itself was making things worse. 30 s, doubling to 5 min.
             wait = min(300, 30 * (2 ** min(_TRIES, 3)))
             _TRIES += 1
             _NEXT_TRY = time.ticks_add(now, wait * 1000)
-            _log("retry %d (status=%s): re-issuing connect, next in %ds" % (_TRIES, st, wait))
+            _log("retry %d (status=%s%s): re-arming, next in %ds"
+                 % (_TRIES, st, " stuck" if stuck else "", wait))
             try:
+                if stuck:
+                    STA.disconnect()        # clear the half-open attempt first
                 STA.connect(cfg["ssid"], cfg["pwd"])
+                _CONNECT_AT = now
             except Exception as exc:                               # noqa: BLE001
                 _log("retry connect raised: %s" % exc)
         return None
