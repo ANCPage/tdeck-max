@@ -65,10 +65,18 @@ def start():
     # /net_on on the device when there is a verified network to join.
     def bring_up_net():
         try:
-            import net
+            # NOTE: net.py lives INSIDE the package. `import net` raises
+            # ModuleNotFoundError here, and because this helper used to just
+            # print, that failure was invisible over USB -- the device simply
+            # never appeared on the LAN and we had nothing to go on.
+            from tdeckmax import net
             net.start()
         except Exception as exc:                                 # noqa: BLE001
-            print("net bring-up failed:", exc)
+            try:
+                with open("/net.log", "a") as fh:
+                    fh.write("bring-up failed: %r\n" % (exc,))
+            except Exception:
+                pass
 
     try:
         import os

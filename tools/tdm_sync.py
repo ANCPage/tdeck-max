@@ -48,6 +48,12 @@ def read_line(s):
     return buf.decode("utf-8", "replace").strip()
 
 
+def rpath(p):
+    """Device path from a friendly one: 'boot.log', ':boot.log', '/boot.log'."""
+    p = p.lstrip(":")
+    return p if p.startswith("/") else "/" + p
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -67,12 +73,12 @@ def main():
             print("%9s  %s" % (size, path))
 
     elif cmd == "get":
-        remote = sys.argv[2]
+        remote = rpath(sys.argv[2])
         local = sys.argv[3] if len(sys.argv) > 3 else os.path.basename(remote)
         s.sendall(("TDM %s GET %s\n" % (token, remote)).encode())
         head = read_line(s).split()
-        if head[0] != "OK":
-            sys.exit("device said: %s" % " ".join(head))
+        if not head or head[0] != "OK":
+            sys.exit("device said: %s" % (" ".join(head) or "nothing (does that file exist?)"))
         want = int(head[1])
         data = b""
         while len(data) < want:
@@ -82,17 +88,20 @@ def main():
             data += chunk
         with open(local, "wb") as fh:
             fh.write(data)
-        print("got %d bytes -> %s" % (len(data), local))
+        print("got %d of %d bytes -> %s" % (len(data), want, local))
 
     elif cmd == "put":
-        local, remote = sys.argv[2], sys.argv[3]
+        local, remote = sys.argv[2], rpath(sys.argv[3])
         with open(local, "rb") as fh:
             data = fh.read()
         s.sendall(("TDM %s PUT %s %d\n" % (token, remote, len(data))).encode())
         if read_line(s) != "OK":
             sys.exit("device refused the write")
         s.sendall(data)
-        print("sent %d bytes -> %s" % (len(data), remote))
+        ack = read_line(s)                      # the device confirms what it wrote
+        print("put %s: %s" % (remote, ack or "no confirmation (write may have failed)"))
+        if not ack.startswith("DONE"):
+            sys.exit(1)
 
     elif cmd == "rm":
         s.sendall(("TDM %s RM %s\n" % (token, sys.argv[2])).encode())
