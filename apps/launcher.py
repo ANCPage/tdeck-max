@@ -4,6 +4,7 @@
 
 from tdeckmax import CELL, WIDTH
 from tdeckmax.screen import Screen, draw_chrome
+from apps.chat import ChatScreen
 from apps.device import DeviceScreen, LogScreen
 from apps.notes import NotesScreen
 
@@ -16,6 +17,7 @@ class LauncherScreen(Screen):
     hints = ("j/k move   ENT: open", "DEL: back from an app")
 
     ITEMS = (
+        ("Chat", ChatScreen),
         ("Notes", NotesScreen),
         ("Device", DeviceScreen),
         ("Net log", LogScreen),

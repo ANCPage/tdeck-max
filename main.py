@@ -105,7 +105,7 @@ def start():
     state = {"changed": False, "beat": time.ticks_ms(), "keys": 0,
              "armed": time.ticks_ms(), "batt": time.ticks_ms(), "repulses": 0,
              "net_on": net_on, "netpoll": time.ticks_ms(),
-             "lastkey": time.ticks_ms()}
+             "lastkey": time.ticks_ms(), "repaint": time.ticks_ms()}
 
     def revive_if_deaf():
         """The TCA8418 can come up latched: I2C answers, registers look sane,
@@ -129,6 +129,12 @@ def start():
             app.paint()                 # redraw so the operator sees it did something
 
     def pump():
+        # Screens waiting on something (the chat's in-flight request) ask to be
+        # repainted so the "thinking 12s" counter moves. Still never blocks.
+        if getattr(app.top(), "tick_repaint", False) and \
+                time.ticks_diff(time.ticks_ms(), state["repaint"]) > 500:
+            state["repaint"] = time.ticks_ms()
+            app.paint()
         # notes: flush to flash once typing has stopped. Debounced on purpose --
         # one write per pause, not per keystroke (flash wear), and the header's
         # "*" disappears once it is safely written.
