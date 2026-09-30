@@ -24,6 +24,11 @@ except ImportError:                       # host-side import for tests
 
 PORT = 8098
 cfg = None
+LAST_IP = None          # set once we are on the network; the UI shows it
+STA = None              # the WLAN object, owned by begin()/poll()
+_SERVED = False         # service + beacon started once
+_TRIES = 0              # association retries (capped backoff)
+_NEXT_TRY = 0           # ticks deadline for the next retry
 LOG_PATH = "/net.log"
 
 
@@ -126,8 +131,23 @@ def _walk(root="/"):
     return out
 
 
+def _read_line(conn, limit=256):
+    """Read one \\n-terminated line byte by byte.
+
+    Deliberately NOT conn.readline(): a buffered readline can swallow part of
+    the payload that follows, and this protocol is header-then-raw-bytes.
+    """
+    buf = b""
+    while len(buf) < limit:
+        ch = conn.read(1)
+        if not ch or ch == b"\n":
+            break
+        buf += ch
+    return buf.decode("utf-8", "replace").strip()
+
+
 def _handle(conn):
-    line = conn.readline().decode().strip()
+    line = _read_line(conn)
     parts = line.split()
     if len(parts) < 3 or parts[0] != "TDM" or parts[1] != cfg["token"]:
         conn.send(b"ERR auth\n")
@@ -155,21 +175,39 @@ def _handle(conn):
                 os.mkdir(parent)
             except OSError:
                 pass
+        # Write to a temp file and only replace the target once the WHOLE
+        # payload has arrived. A client that gives up mid-transfer used to leave
+        # the target truncated -- that is how /tdeckmax/__init__.py got gutted
+        # to 0 bytes on 2026-09-30 and would have broken the next boot.
+        tmp = path + ".part"
         conn.send(b"OK\n")
         remaining = size
         written = 0
-        with open(path, "wb") as fh:
-            while remaining > 0:
-                chunk = conn.read(min(512, remaining))
-                if not chunk:
-                    break
-                fh.write(chunk)
-                remaining -= len(chunk)
-                written += len(chunk)
-        # Confirm the write: without this the client's "sent N bytes" means only
-        # that the bytes left the Pi, which is how a write that never landed
-        # still looked successful.
-        _log("put %s %d/%d bytes" % (path, written, size))
+        try:
+            with open(tmp, "wb") as fh:
+                while remaining > 0:
+                    chunk = conn.read(min(512, remaining))
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    remaining -= len(chunk)
+                    written += len(chunk)
+        except Exception as exc:                                   # noqa: BLE001
+            _log("put %s interrupted after %d bytes: %s" % (path, written, exc))
+
+        if written == size and size > 0:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            os.rename(tmp, path)
+            _log("put %s ok (%d bytes)" % (path, written))
+        else:
+            _log("put %s INCOMPLETE (%d/%d) - old file kept" % (path, written, size))
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
         conn.send(("DONE %d\n" % written).encode())
     elif op == "MKD":
         try:
@@ -218,6 +256,14 @@ def serve(port=PORT):
     while True:
         try:
             conn, _ = s.accept()
+            # A timeout is essential: without one, one client that vanishes
+            # mid-request blocks the whole (single-threaded) service, and every
+            # later connection just queues and times out -- the failure mode
+            # that made PUT mysteriously "not answer" on 2026-09-30.
+            try:
+                conn.settimeout(15)
+            except Exception:                                      # noqa: BLE001
+                pass
         except Exception:
             continue
         try:
@@ -231,19 +277,88 @@ def serve(port=PORT):
                 pass
 
 
-def start():
-    """Connect + beacon + spawn the file service in a thread. Never fatal."""
-    _log("--- net.start() ---")
-    ip = connect()
-    if not ip:
-        _log("no WiFi: staying offline")
-        return None
-    _log("up as %s" % ip)
-    beacon(ip)
+def begin():
+    """START an association without blocking.
+
+    w.connect() hands the work to the ESP-IDF WiFi stack; the waiting is what
+    used to block. The app calls poll() from its own loop instead, so a slow or
+    failing network can never freeze the UI (which is exactly what happened when
+    bring-up ran at boot as a blocking thread).
+    """
+    global STA
+    if network is None or not load_cfg():
+        _log("begin: no network module, or /wifi.json missing")
+        return False
+    STA = network.WLAN(network.STA_IF)
     try:
-        import _thread
-        _thread.start_new_thread(serve, ())
-        _log("file service on port %d" % PORT)
-    except Exception as exc:
-        _log("service not started: %s" % exc)
-    return ip
+        STA.active(True)
+    except Exception as exc:                                       # noqa: BLE001
+        _log("begin: active() failed: %s" % exc)
+        return False
+    if STA.isconnected():
+        return True
+    try:
+        _log("begin: connecting to %r" % cfg["ssid"])
+        STA.connect(cfg["ssid"], cfg["pwd"])
+        return True
+    except Exception as exc:                                       # noqa: BLE001
+        _log("begin: connect() raised: %s" % exc)
+        return False
+
+
+def poll():
+    """Called from the app loop. Returns the IP once up; starts the beacon and
+    the file service exactly once. Never blocks, never raises."""
+    global LAST_IP, _SERVED, _TRIES, _NEXT_TRY
+    if STA is None:
+        return None
+    try:
+        if STA.isconnected():
+            ip = STA.ifconfig()[0]
+            _TRIES = 0
+            if not _SERVED:
+                _SERVED = True
+                LAST_IP = ip
+                _log("connected ip=%s" % ip)
+                beacon(ip)
+                try:
+                    import _thread
+                    _thread.start_new_thread(serve, ())
+                    _log("file service on port %d" % PORT)
+                except Exception as exc:                           # noqa: BLE001
+                    _log("service not started: %s" % exc)
+            return ip
+
+        # Not connected. The WiFi stack SILENTLY GOES IDLE (status 1000) or
+        # gives up (201/203) and then nothing retries -- observed on this
+        # extender network, where the device sat at 0.0.0.0 doing nothing.
+        # Re-arm the association with a capped backoff.
+        st = STA.status()
+        now = time.ticks_ms()
+        if st in (1000, 201, 202, 203) and time.ticks_diff(now, _NEXT_TRY) >= 0:
+            wait = min(60, 5 * (2 ** min(_TRIES, 4)))
+            _TRIES += 1
+            _NEXT_TRY = time.ticks_add(now, wait * 1000)
+            _log("retry %d (status=%s): re-issuing connect, next in %ds" % (_TRIES, st, wait))
+            try:
+                STA.connect(cfg["ssid"], cfg["pwd"])
+            except Exception as exc:                               # noqa: BLE001
+                _log("retry connect raised: %s" % exc)
+        return None
+    except Exception:                                              # noqa: BLE001
+        return None
+
+
+def start():
+    """Blocking bring-up for scripts: connect + beacon + service. Never fatal."""
+    if not begin():
+        return None
+    import time as _t
+    t0 = _t.time()
+    while _t.time() - t0 < 35:
+        ip = poll()
+        if ip:
+            return ip
+        _t.sleep(0.5)
+    _log("gave up after 35s: status=%s" % STA.status())
+    return None

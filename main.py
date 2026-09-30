@@ -57,34 +57,23 @@ def start():
     app.push(notes)
     app.paint()
 
-    # Bring the network up in a THREAD: WiFi is slow to associate and must never
-    # delay or break the UI. OFF BY DEFAULT: a WiFi connect that cannot succeed
-    # blocks the network stack for up to 25 s, which trips the ESP32 task
-    # watchdog and reboots the chip (observed as reset_cause=2 in /boot.log, and
-    # as "the device switches itself off after ~15 s" from the outside). Create
-    # /net_on on the device when there is a verified network to join.
-    def bring_up_net():
-        try:
-            # NOTE: net.py lives INSIDE the package. `import net` raises
-            # ModuleNotFoundError here, and because this helper used to just
-            # print, that failure was invisible over USB -- the device simply
-            # never appeared on the LAN and we had nothing to go on.
-            from tdeckmax import net
-            net.start()
-        except Exception as exc:                                 # noqa: BLE001
-            try:
-                with open("/net.log", "a") as fh:
-                    fh.write("bring-up failed: %r\n" % (exc,))
-            except Exception:
-                pass
-
+    # Network bring-up must NEVER block the UI. begin() only kicks off the
+    # association (the IDF stack does the work); pump() polls for the result.
+    # The old code ran a blocking connect in a thread at boot, and when the
+    # network was slow that froze the entire device: no keys, no panel, not even
+    # a USB REPL. OFF BY DEFAULT -- create /net_on when you want it.
+    net_on = False
     try:
         import os
         if "net_on" in os.listdir("/"):
-            import _thread
-            _thread.start_new_thread(bring_up_net, ())
-    except Exception:
-        pass
+            from tdeckmax import net
+            net_on = net.begin()
+    except Exception as exc:                                       # noqa: BLE001
+        try:
+            with open("/net.log", "a") as fh:
+                fh.write("begin failed: %r\n" % (exc,))
+        except Exception:
+            pass
 
     # Diagnostics WITHOUT touching flash in the hot path: per-keystroke log
     # flushes meant a flash write per key with live USB, which is a known
@@ -107,25 +96,49 @@ def start():
     recent = []                     # last keys seen, RAM only
 
     state = {"changed": False, "beat": time.ticks_ms(), "keys": 0,
-             "armed": time.ticks_ms(), "batt": time.ticks_ms()}
+             "armed": time.ticks_ms(), "batt": time.ticks_ms(), "repulses": 0,
+             "net_on": net_on, "netpoll": time.ticks_ms()}
 
     def revive_if_deaf():
         """The TCA8418 can come up latched: I2C answers, registers look sane,
         and it never queues a single key event. Seen three times on this board.
         If no key has EVER arrived a while after boot, pulse its reset and
-        re-init. One flash write per attempt, not per keystroke."""
-        if state["keys"] == 0 and time.ticks_diff(time.ticks_ms(), state["armed"]) > 20000:
+        re-init.
+
+        Capped at a few attempts and logged once: the original version retried
+        forever, which spammed /boot.log with a flash write every 20 s (flash
+        wear) and looked like a fault in the log even when the app was fine.
+        """
+        if state["keys"] == 0 and state["repulses"] < 3 \
+                and time.ticks_diff(time.ticks_ms(), state["armed"]) > 20000:
             board.pulse_keyboard_reset()
             kb.begin()
-            with open("/boot.log", "a") as fh:
-                fh.write("keyboard re-pulse (still no events)\n")
+            state["repulses"] += 1
+            if state["repulses"] == 1:      # log the first one only
+                with open("/boot.log", "a") as fh:
+                    fh.write("keyboard re-pulse (no events yet)\n")
             state["armed"] = time.ticks_ms()
             app.paint()                 # redraw so the operator sees it did something
 
     def pump():
-        # battery: cheap I2C read every few seconds (2 bytes at 100 kHz)
+        # network: polled from the UI loop, so it can never block the device
+        if state["net_on"] and time.ticks_diff(time.ticks_ms(), state["netpoll"]) > 1000:
+            state["netpoll"] = time.ticks_ms()
+            try:
+                from tdeckmax import net
+                net.poll()
+            except Exception:
+                pass
+        # battery + wifi marker: cheap reads every few seconds
         if time.ticks_diff(time.ticks_ms(), state["batt"]) > 5000:
-            notes.status = gauge.soc_text() + " "
+            marker = "  "
+            try:
+                from tdeckmax import net
+                if getattr(net, "LAST_IP", None):
+                    marker = "w "          # on the network: the header says so
+            except Exception:
+                pass
+            notes.status = gauge.soc_text() + " " + marker
             state["batt"] = time.ticks_ms()
         if kb.available():
             raw = kb.get_event()
