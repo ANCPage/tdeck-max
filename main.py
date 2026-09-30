@@ -24,6 +24,7 @@ from tdeckmax.epd import UC8253
 from tdeckmax.planner import Planner
 from tdeckmax.screen import App
 from tdeckmax.tca8418 import TCA8418
+from apps.launcher import LauncherScreen
 from apps.notes import NotesScreen
 
 COALESCE_MS = 120
@@ -54,7 +55,13 @@ def start():
     app = App(Planner(epd, fast_budget=5), fb, buf)
     notes = NotesScreen()
     notes.status = gauge.soc_text() + " "      # battery in the header, as the factory UI has it
-    app.push(notes)
+    # Boot into the launcher; hand it the Notes instance so main.py can keep
+    # updating that header, and give the Device screen the live gauge.
+    import apps.device as device_app
+    device_app.gauge = gauge
+    launcher = LauncherScreen()
+    launcher.provide("Notes", notes)
+    app.push(launcher)
     app.paint()
 
     # Network bring-up must NEVER block the UI. begin() only kicks off the

@@ -98,23 +98,29 @@ def connect(timeout_s=35):
 
 
 def beacon(ip):
-    """Tell the Pi we're up so it learns our address without USB."""
-    try:
-        s = socket.socket()
-        s.settimeout(4)
-        s.connect((cfg["pi"], 8099))
-        body = ('{"ip":"%s","port":%d}' % (ip, PORT)).encode()
-        s.send(b"POST /boot HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n"
-               b"Connection: close\r\n\r\n" % (cfg["pi"].encode(), len(body)))
-        s.send(body)
-        s.close()
-        _log("beacon sent (%s -> %s:8099)" % (ip, cfg["pi"]))
-        return True
-    except Exception as exc:
-        # Logged, not printed: a silent beacon failure is how the Pi ended up
-        # with a stale address while everything looked healthy.
-        _log("beacon FAILED to %s:8099: %s" % (cfg.get("pi"), exc))
-        return False
+    """Tell the Pi we're up so it learns our address without USB.
+
+    Timeout is generous because THIS link is slow: measured 1-3 s just for a
+    TCP connect (the router itself took 3.0 s), so the original 4 s budget made
+    a working path look broken.
+    """
+    for attempt in (1, 2):
+        try:
+            s = socket.socket()
+            s.settimeout(12)
+            s.connect((cfg["pi"], 8099))
+            body = ('{"ip":"%s","port":%d}' % (ip, PORT)).encode()
+            s.send(b"POST /boot HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n"
+                   b"Connection: close\r\n\r\n" % (cfg["pi"].encode(), len(body)))
+            s.send(body)
+            s.close()
+            _log("beacon sent (%s -> %s:8099)" % (ip, cfg["pi"]))
+            return True
+        except Exception as exc:
+            # Logged, not printed: a silent beacon failure is how the Pi ended up
+            # with a stale address while everything looked healthy.
+            _log("beacon attempt %d FAILED to %s:8099: %s" % (attempt, cfg.get("pi"), exc))
+    return False
 
 
 def _walk(root="/"):

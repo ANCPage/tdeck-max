@@ -47,7 +47,10 @@ def target():
     return ip, cfg["token"]
 
 
-def open_conn(ip, timeout=20):
+def open_conn(ip, timeout=None):
+    # This network is slow (1-3 s just to connect), so the default is generous
+    # and overridable: TDM_TIMEOUT=60 python3 tools/tdm_sync.py ls
+    timeout = timeout or int(os.environ.get("TDM_TIMEOUT", "30"))
     s = socket.create_connection((ip, PORT), timeout)
     s.settimeout(timeout)
     return s

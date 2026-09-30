@@ -86,7 +86,8 @@ class NotesScreen(Screen):
                 if self.text:
                     self._delete()
                     return True
-                return False          # empty page: let the launcher handle it
+                app.pop()             # empty page: DEL steps back to the launcher
+                return True
             return False
         return False
 
