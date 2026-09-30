@@ -18,6 +18,7 @@ import framebuf
 import machine
 
 from tdeckmax import HEIGHT, WIDTH, keys
+from tdeckmax.battery import BQ27220
 from tdeckmax.board import Board
 from tdeckmax.epd import UC8253
 from tdeckmax.planner import Planner
@@ -41,10 +42,14 @@ def start():
     kb = TCA8418(board.i2c)
     print("kb.begin():", kb.begin())
 
+    gauge = BQ27220(board.i2c)         # BQ27220 fuel gauge @ 0x55 (battery)
+
     buf = bytearray(WIDTH * HEIGHT // 8)
     fb = framebuf.FrameBuffer(buf, WIDTH, HEIGHT, framebuf.MONO_HLSB)
     app = App(Planner(epd, fast_budget=0), fb, buf)
-    app.push(NotesScreen())
+    notes = NotesScreen()
+    notes.status = gauge.soc_text() + " "      # battery in the header, as the factory UI has it
+    app.push(notes)
     app.paint()
 
     # Bring the network up in a THREAD: WiFi is slow to associate and must never
@@ -74,10 +79,11 @@ def start():
     with open("/boot.log", "a") as fh:
         fh.write("boot reset_cause=%s(%s) note=%s\n"
                  % (cause, reasons.get(cause, "?"), machine.wake_reason()))
+        fh.write(gauge.summary() + "\n")
     recent = []                     # last keys seen, RAM only
 
     state = {"changed": False, "beat": time.ticks_ms(), "keys": 0,
-             "armed": time.ticks_ms()}
+             "armed": time.ticks_ms(), "batt": time.ticks_ms()}
 
     def revive_if_deaf():
         """The TCA8418 can come up latched: I2C answers, registers look sane,
@@ -93,6 +99,10 @@ def start():
             app.paint()                 # redraw so the operator sees it did something
 
     def pump():
+        # battery: cheap I2C read every few seconds (2 bytes at 100 kHz)
+        if time.ticks_diff(time.ticks_ms(), state["batt"]) > 5000:
+            notes.status = gauge.soc_text() + " "
+            state["batt"] = time.ticks_ms()
         if kb.available():
             raw = kb.get_event()
             key = keys.decode_raw(raw, letters=True)
