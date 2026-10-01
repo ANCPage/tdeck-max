@@ -84,8 +84,12 @@ class ChatScreen(Screen):
         self.pending = False       # a request is in flight
         self.started = 0
         self.seconds = 0.0
+        self.progress = ""         # e.g. "retry 2/3 (14s)"
         self.messages = []          # (who, text)
         self.load()
+
+    def _set_progress(self, text):
+        self.progress = text
 
     # -- transcript ------------------------------------------------------------
     def load(self):
@@ -121,17 +125,33 @@ class ChatScreen(Screen):
         screen = self
 
         def worker():
-            try:
-                if not host or not token:
-                    reply = "(no pi/token in /wifi.json)"
-                else:
+            """Ask the agent, retrying: this link drops packets intermittently
+            (EHOSTUNREACH mid-session, both directions failing at random), so a
+            single attempt made a healthy system look broken."""
+            reply = None
+            last = None
+            for attempt in range(3):
+                try:
+                    if not host or not token:
+                        reply = "(no pi/token in /wifi.json)"
+                        break
                     res = _post_json(host, BRIDGE_PORT, "/chat",
                                      {"token": token, "text": text})
                     reply = res.get("reply") or "(empty reply)"
-            except Exception as exc:                                # noqa: BLE001
-                reply = "(network error: %s)" % exc
+                    break
+                except Exception as exc:                            # noqa: BLE001
+                    last = exc
+                    screen._set_progress("retry %d/3 (%.0fs)" % (
+                        attempt + 1, time.ticks_diff(time.ticks_ms(), screen.started) / 1000.0))
+                    if attempt < 2:
+                        time.sleep(3)
+            if reply is None:
+                reply = ("(could not reach the Pi after 3 tries: %s)\n"
+                         "The device's WiFi link is flaky - check the Device screen "
+                         "for its address, or try again." % last)
             screen._append("hermes", reply)
             screen.pending = False
+            screen.progress = ""
             screen.scroll = 0
 
         try:
@@ -194,7 +214,7 @@ class ChatScreen(Screen):
     def render(self, fb, app):
         if self.pending:
             self.seconds = time.ticks_diff(time.ticks_ms(), self.started) / 1000.0
-            right = "thinking %.0fs" % self.seconds
+            right = self.progress or ("thinking %.0fs" % self.seconds)
         else:
             right = "%d msgs" % len(self.messages)
         draw_chrome(fb, self, app, right=right)
