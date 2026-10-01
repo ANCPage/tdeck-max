@@ -22,7 +22,8 @@ COLS = (WIDTH - 2 * LEFT) // CELL
 ROWS = (HEIGHT - HEADER_H - FOOTER_H - 26) // LINE_H     # leaves room for the input line
 CHAT_LOG = "/chat.log"
 BRIDGE_PORT = 8097
-TIMEOUT_S = 300
+TIMEOUT_S = 90       # per attempt: long enough for an agent turn (~13 s here),
+                     # short enough that a dead link surfaces instead of hanging
 
 _cfg = None
 
@@ -72,9 +73,15 @@ class ChatScreen(Screen):
 
     @property
     def tick_repaint(self):
-        """True while a request is in flight: main.py then repaints ~2x/second
-        so the elapsed counter moves without anything blocking."""
-        return self.pending
+        """True while a request is in flight (so the elapsed counter moves) and
+        once a result has landed (so the ANSWER gets drawn).
+
+        That second half was missing: the worker cleared `pending`, which turned
+        the repaint off, and the reply sat in memory invisible until the next
+        keypress. The screen froze on "thinking 18s" with the answer already
+        received.
+        """
+        return self.pending or self._needs_paint
 
     def __init__(self):
         self.text = ""              # what is being typed
@@ -85,6 +92,7 @@ class ChatScreen(Screen):
         self.started = 0
         self.seconds = 0.0
         self.progress = ""         # e.g. "retry 2/3 (14s)"
+        self._needs_paint = False  # a result arrived and must be drawn
         self.messages = []          # (who, text)
         self.load()
 
@@ -150,6 +158,7 @@ class ChatScreen(Screen):
                          "The device's WiFi link is flaky - check the Device screen "
                          "for its address, or try again." % last)
             screen._append("hermes", reply)
+            screen._needs_paint = True     # draw the answer (see tick_repaint)
             screen.pending = False
             screen.progress = ""
             screen.scroll = 0
@@ -212,6 +221,7 @@ class ChatScreen(Screen):
         return out or [""]
 
     def render(self, fb, app):
+        self._needs_paint = False          # whatever arrived is now on the glass
         if self.pending:
             self.seconds = time.ticks_diff(time.ticks_ms(), self.started) / 1000.0
             right = self.progress or ("thinking %.0fs" % self.seconds)
