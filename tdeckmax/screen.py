@@ -79,5 +79,6 @@ class App:
         return self.top().handle(key, self)
 
     def paint(self):
-        self.planner.paint(self.fb, self.buf, self.top(), self, full=self.full)
+        mode = self.planner.paint(self.fb, self.buf, self.top(), self, full=self.full)
         self.full = False
+        return mode

@@ -134,7 +134,16 @@ def start():
         if getattr(app.top(), "tick_repaint", False) and \
                 time.ticks_diff(time.ticks_ms(), state["repaint"]) > 500:
             state["repaint"] = time.ticks_ms()
-            app.paint()
+            mode = app.paint()
+            # A trace file, because "the screen didn't update" can mean the
+            # repaint never happened OR the panel ignored it, and those need
+            # telling apart by evidence rather than by another guess.
+            try:
+                with open("/app.log", "a") as fh:
+                    fh.write("paint %s top=%s at %d\n"
+                             % (mode, app.top().__class__.__name__, time.ticks_ms()))
+            except Exception:
+                pass
         # notes: flush to flash once typing has stopped. Debounced on purpose --
         # one write per pause, not per keystroke (flash wear), and the header's
         # "*" disappears once it is safely written.

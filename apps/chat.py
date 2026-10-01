@@ -39,7 +39,13 @@ def config(path="/wifi.json"):
 
 
 def _post_json(host, port, path, payload, timeout=TIMEOUT_S):
-    """Minimal HTTP/1.1 POST with a JSON body. Returns the parsed reply."""
+    """Minimal HTTP/1.1 POST with a JSON body. Returns the parsed reply.
+
+    Reads the body by Content-Length rather than waiting for the peer to close
+    the connection: on this link the close arrives tens of seconds after the
+    body, so "read until EOF" left the app showing "thinking 65s" with the
+    answer already sitting in the socket.
+    """
     body = json.dumps(payload).encode()
     s = socket.socket()
     try:
@@ -48,23 +54,43 @@ def _post_json(host, port, path, payload, timeout=TIMEOUT_S):
         s.send(("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\n"
                 "Content-Length: %d\r\nConnection: close\r\n\r\n" % (path, host, len(body))).encode())
         s.send(body)
+
         raw = b""
-        while True:
+        while b"\r\n\r\n" not in raw:
             chunk = s.recv(512)
             if not chunk:
                 break
             raw += chunk
+        head, _, data = raw.partition(b"\r\n\r\n")
+
+        want = 0
+        for line in head.split(b"\r\n"):
+            if line.lower().startswith(b"content-length:"):
+                try:
+                    want = int(line.split(b":", 1)[1])
+                except Exception:                                  # noqa: BLE001
+                    want = 0
+        if want:
+            while len(data) < want:
+                chunk = s.recv(min(512, want - len(data)))
+                if not chunk:
+                    break
+                data += chunk
+        else:
+            while True:
+                chunk = s.recv(512)
+                if not chunk:
+                    break
+                data += chunk
     finally:
         try:
             s.close()
         except Exception:
             pass
-    head, _, data = raw.partition(b"\r\n\r\n")
-    # chunked or plain: the bridge sends Content-Length, so a plain body is fine
     try:
         return json.loads(data.decode("utf-8", "replace"))
     except Exception:
-        return {"reply": "(unreadable reply from the bridge: %r)" % raw[:80]}
+        return {"reply": "(unreadable reply from the bridge: %r)" % data[:80]}
 
 
 class ChatScreen(Screen):
@@ -136,6 +162,14 @@ class ChatScreen(Screen):
             """Ask the agent, retrying: this link drops packets intermittently
             (EHOSTUNREACH mid-session, both directions failing at random), so a
             single attempt made a healthy system look broken."""
+            def trace(msg):
+                try:
+                    with open("/app.log", "a") as fh:
+                        fh.write("chat %s at %d\n" % (msg, time.ticks_ms()))
+                except Exception:
+                    pass
+
+            trace("worker start")
             reply = None
             last = None
             for attempt in range(3):
@@ -149,6 +183,7 @@ class ChatScreen(Screen):
                     break
                 except Exception as exc:                            # noqa: BLE001
                     last = exc
+                    trace("attempt %d failed: %r" % (attempt + 1, exc))
                     screen._set_progress("retry %d/3 (%.0fs)" % (
                         attempt + 1, time.ticks_diff(time.ticks_ms(), screen.started) / 1000.0))
                     if attempt < 2:
@@ -162,6 +197,7 @@ class ChatScreen(Screen):
             screen.pending = False
             screen.progress = ""
             screen.scroll = 0
+            trace("worker done, reply len %d" % len(reply))
 
         try:
             import _thread
